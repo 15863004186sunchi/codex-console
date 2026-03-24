@@ -8,6 +8,7 @@ import sys
 import secrets
 import hmac
 import hashlib
+import inspect
 from typing import Optional
 from pathlib import Path
 
@@ -91,6 +92,11 @@ def create_app() -> FastAPI:
     # 模板引擎
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["static_version"] = _build_static_asset_version(STATIC_DIR)
+    try:
+        _tpl_params = list(inspect.signature(templates.TemplateResponse).parameters)
+        _tpl_requires_request = bool(_tpl_params) and _tpl_params[0] == "request"
+    except Exception:
+        _tpl_requires_request = False
 
     def _auth_token(password: str) -> str:
         secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
@@ -106,7 +112,9 @@ def create_app() -> FastAPI:
 
     def _render(template_name: str, request: Request, status_code: int = 200, **context):
         payload = {"request": request, **context}
-        return templates.TemplateResponse(name=template_name, context=payload, status_code=status_code)
+        if _tpl_requires_request:
+            return templates.TemplateResponse(request, template_name, payload, status_code=status_code)
+        return templates.TemplateResponse(template_name, payload, status_code=status_code)
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request, next: Optional[str] = "/"):
