@@ -22,6 +22,7 @@ usage() {
 用法:
   ./deploy.sh start    # 启动全部服务（后台）
   ./deploy.sh stop     # 停止并移除容器
+  ./deploy.sh restart  # 重启并强制重构镜像
   ./deploy.sh logs     # 查看全部服务日志（跟随）
   ./deploy.sh status   # 查看服务状态
   ./deploy.sh help     # 显示帮助
@@ -40,6 +41,13 @@ cmd_stop() {
   echo "完成: 服务已停止。"
 }
 
+cmd_restart() {
+  require_docker
+  echo "正在强制重构并重启镜像..."
+  docker compose up -d --build
+  echo "完成: 服务已重组启动。"
+}
+
 cmd_logs() {
   require_docker
   docker compose logs -f --tail=200
@@ -51,10 +59,11 @@ cmd_status() {
 }
 
 case "$cmd" in
-  start)  cmd_start ;;
-  stop)   cmd_stop ;;
-  logs)   cmd_logs ;;
-  status) cmd_status ;;
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_restart ;;
+  logs)    cmd_logs ;;
+  status)  cmd_status ;;
   help|"") usage ;;
   *)
     echo "错误: 未知命令 '$cmd'"
