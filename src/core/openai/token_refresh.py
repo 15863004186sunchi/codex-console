@@ -272,13 +272,14 @@ class TokenRefreshManager:
             return False, f"验证异常: {str(e)}"
 
 
-def refresh_account_token(account_id: int, proxy_url: Optional[str] = None) -> TokenRefreshResult:
+def refresh_account_token(account_id: int, proxy_url: Optional[str] = None, auto_sync: bool = False) -> TokenRefreshResult:
     """
     刷新指定账号的 Token 并更新数据库
 
     Args:
         account_id: 账号 ID
         proxy_url: 代理 URL
+        auto_sync: 刷新成功后是否自动同步到 CPA (仅针对已上传过的账号)
 
     Returns:
         TokenRefreshResult: 刷新结果
@@ -295,7 +296,8 @@ def refresh_account_token(account_id: int, proxy_url: Optional[str] = None) -> T
             # 更新数据库
             update_data = {
                 "access_token": result.access_token,
-                "last_refresh": datetime.utcnow()
+                "last_refresh": datetime.utcnow(),
+                "status": "active"  # 刷新成功恢复活跃状态
             }
 
             if result.refresh_token:
@@ -305,6 +307,28 @@ def refresh_account_token(account_id: int, proxy_url: Optional[str] = None) -> T
                 update_data["expires_at"] = result.expires_at
 
             crud.update_account(db, account_id, **update_data)
+
+            # 自动同步到 CPA/CPAMC (仅当账号之前已上传过时)
+            if auto_sync and account.cpa_uploaded:
+                try:
+                    from ..upload.cpa_upload import upload_to_cpa, generate_token_json
+                    # 生成最新的 token 数据
+                    token_data = generate_token_json(account)
+                    
+                    # 确保使用刷新后的最新值（因为数据库刚更新，内存对象可能还未同步）
+                    token_data["access_token"] = result.access_token
+                    if result.refresh_token:
+                        token_data["refresh_token"] = result.refresh_token
+                    if result.expires_at:
+                        token_data["expired"] = result.expires_at.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+                    
+                    success, msg = upload_to_cpa(token_data)
+                    if success:
+                        logger.info(f"账号 {account.email} Token 刷新后自动同步成功")
+                    else:
+                        logger.warning(f"账号 {account.email} Token 刷新后自动同步失败: {msg}")
+                except Exception as e:
+                    logger.error(f"账号 {account.email} 自动同步异常: {e}")
 
         return result
 

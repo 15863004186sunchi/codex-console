@@ -112,7 +112,11 @@ def resolve_account_ids(
         return ids
     query = db.query(Account.id)
     if status_filter:
-        query = query.filter(Account.status == status_filter)
+        if "," in status_filter:
+            statuses = [s.strip() for s in status_filter.split(",")]
+            query = query.filter(Account.status.in_(statuses))
+        else:
+            query = query.filter(Account.status == status_filter)
     if email_service_filter:
         query = query.filter(Account.email_service == email_service_filter)
     if search_filter:
@@ -570,12 +574,14 @@ async def get_accounts_stats():
 class TokenRefreshRequest(BaseModel):
     """Token 刷新请求"""
     proxy: Optional[str] = None
+    auto_sync: bool = False  # 刷新成功后是否自动同步到已绑定的 CPA/CPAMC
 
 
 class BatchRefreshRequest(BaseModel):
     """批量刷新请求"""
     ids: List[int] = []
     proxy: Optional[str] = None
+    auto_sync: bool = False  # 是否自动同步到已绑定的 CPA
     select_all: bool = False
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
@@ -601,6 +607,7 @@ class BatchValidateRequest(BaseModel):
 async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: BackgroundTasks):
     """批量刷新账号 Token"""
     proxy = _get_proxy(request.proxy)
+    auto_sync = request.auto_sync
 
     results = {
         "success_count": 0,
@@ -616,7 +623,8 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
 
     for account_id in ids:
         try:
-            result = do_refresh(account_id, proxy)
+            # 传入 auto_sync 参数
+            result = do_refresh(account_id, proxy, auto_sync=auto_sync)
             if result.success:
                 results["success_count"] += 1
             else:
@@ -633,7 +641,9 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
 async def refresh_account_token(account_id: int, request: Optional[TokenRefreshRequest] = Body(default=None)):
     """刷新单个账号的 Token"""
     proxy = _get_proxy(request.proxy if request else None)
-    result = do_refresh(account_id, proxy)
+    auto_sync = request.auto_sync if request else False
+    
+    result = do_refresh(account_id, proxy, auto_sync=auto_sync)
 
     if result.success:
         return {

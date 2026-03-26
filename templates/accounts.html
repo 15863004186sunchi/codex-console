@@ -116,11 +116,14 @@
                     </div>
 
                     <div class="toolbar-right">
-                        <button class="btn btn-ghost" id="refresh-btn" title="刷新">
+                        <button class="btn btn-ghost" id="refresh-btn" title="刷新列表">
                             🔄 刷新
                         </button>
-                        <button class="btn btn-warning" id="batch-refresh-btn" disabled title="批量刷新Token">
-                            🔄 刷新Token
+                        <button class="btn btn-warning" id="batch-refresh-btn" disabled title="批量刷新选中账号的 Token">
+                            🔄 刷新 Token
+                        </button>
+                        <button class="btn btn-danger" id="refresh-all-401-btn" title="一键刷新所有失效账号并在成功后同步到 CPA">
+                            ⚡ 刷新并同步所有失效
                         </button>
                         <button class="btn btn-info" id="batch-validate-btn" disabled title="批量验证Token">
                             ✅ 验证Token

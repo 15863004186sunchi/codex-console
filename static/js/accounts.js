@@ -36,7 +36,8 @@ const elements = {
     pageInfo: document.getElementById('page-info'),
     detailModal: document.getElementById('detail-modal'),
     modalBody: document.getElementById('modal-body'),
-    closeModal: document.getElementById('close-modal')
+    closeModal: document.getElementById('close-modal'),
+    refreshAll401Btn: document.getElementById('refresh-all-401-btn')
 };
 
 // 初始化
@@ -89,6 +90,11 @@ function initEventListeners() {
 
     // 批量刷新Token
     elements.batchRefreshBtn.addEventListener('click', handleBatchRefresh);
+
+    // 一键刷新失效并同步
+    if (elements.refreshAll401Btn) {
+        elements.refreshAll401Btn.addEventListener('click', handleRefreshAll401);
+    }
 
     // 批量验证Token
     elements.batchValidateBtn.addEventListener('click', handleBatchValidate);
@@ -522,6 +528,34 @@ async function handleBatchRefresh() {
         toast.error('批量刷新失败: ' + error.message);
     } finally {
         updateBatchButtons();
+    }
+}
+
+// 一键刷新所有 401 并同步
+async function handleRefreshAll401() {
+    const confirmed = await confirm('确定要刷新所有状态为“失效”或“过期”的账号吗？\n刷新成功后将自动同步到已绑定的 CPA/CPAMC 平台。');
+    if (!confirmed) return;
+
+    elements.refreshAll401Btn.disabled = true;
+    const originalText = elements.refreshAll401Btn.innerHTML;
+    elements.refreshAll401Btn.textContent = ' 正在重连刷新...';
+
+    try {
+        const payload = {
+            ids: [],
+            select_all: true,
+            status_filter: 'expired,failed',
+            auto_sync: true
+        };
+        const result = await api.post('/accounts/batch-refresh', payload);
+        toast.success(`重连任务完成！成功: ${result.success_count}，失败: ${result.failed_count}`);
+        loadStats();
+        loadAccounts();
+    } catch (error) {
+        toast.error('批量刷新失败: ' + error.message);
+    } finally {
+        elements.refreshAll401Btn.disabled = false;
+        elements.refreshAll401Btn.innerHTML = originalText;
     }
 }
 

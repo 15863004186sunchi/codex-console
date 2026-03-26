@@ -188,6 +188,13 @@ def create_app() -> FastAPI:
         loop = asyncio.get_event_loop()
         task_manager.set_loop(loop)
 
+        # 启动 Token 自动刷新工作线程
+        try:
+            from ..core.openai.refresh_worker import token_refresh_worker
+            asyncio.create_task(token_refresh_worker.start())
+        except Exception as e:
+            logger.error(f"启动 TokenRefreshWorker 失败: {e}")
+
         logger.info("=" * 50)
         logger.info(f"{settings.app_name} v{settings.app_version} 启动中，程序正在伸懒腰...")
         logger.info(f"调试模式: {settings.debug}")
@@ -197,6 +204,13 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_event():
         """应用关闭事件"""
+        # 停止 Token 自动刷新工作线程
+        try:
+            from ..core.openai.refresh_worker import token_refresh_worker
+            token_refresh_worker.stop()
+        except Exception:
+            pass
+
         logger.info("应用关闭，今天先收摊啦")
 
     return app
