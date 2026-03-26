@@ -304,7 +304,14 @@ class TempMailService(BaseEmailService):
 
         while time.time() - start_time < timeout:
             try:
-                if jwt:
+                # 强制优先使用 admin API，因为它更可靠（使用 x-admin-auth）
+                if self.config.get("admin_password"):
+                    response = self._make_request(
+                        "GET",
+                        "/admin/mails",
+                        params={"limit": 20, "offset": 0, "address": email},
+                    )
+                elif jwt:
                     response = self._make_request(
                         "GET",
                         "/user_api/mails",
@@ -312,11 +319,9 @@ class TempMailService(BaseEmailService):
                         headers={"x-user-token": jwt, "Content-Type": "application/json", "Accept": "application/json"},
                     )
                 else:
-                    response = self._make_request(
-                        "GET",
-                        "/admin/mails",
-                        params={"limit": 20, "offset": 0, "address": email},
-                    )
+                    logger.warning(f"TempMail 缺少查询凭证: {email}")
+                    time.sleep(5)
+                    continue
 
                 # /user_api/mails 和 /admin/mails 返回格式相同: {"results": [...], "total": N}
                 mails = response.get("results", [])
