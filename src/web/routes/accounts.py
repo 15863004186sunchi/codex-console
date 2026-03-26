@@ -89,6 +89,7 @@ class BatchDeleteRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    cpa_uploaded_filter: Optional[bool] = None
 
 
 class BatchUpdateRequest(BaseModel):
@@ -106,6 +107,7 @@ def resolve_account_ids(
     status_filter: Optional[str] = None,
     email_service_filter: Optional[str] = None,
     search_filter: Optional[str] = None,
+    cpa_uploaded_filter: Optional[bool] = None,
 ) -> List[int]:
     """当 select_all=True 时查询全部符合条件的 ID，否则直接返回传入的 ids"""
     if not select_all:
@@ -124,6 +126,8 @@ def resolve_account_ids(
         query = query.filter(
             (Account.email.ilike(pattern)) | (Account.account_id.ilike(pattern))
         )
+    if cpa_uploaded_filter is not None:
+        query = query.filter(Account.cpa_uploaded == cpa_uploaded_filter)
     return [row[0] for row in query.all()]
 
 
@@ -586,6 +590,7 @@ class BatchRefreshRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    cpa_uploaded_filter: Optional[bool] = None
 
 
 class TokenValidateRequest(BaseModel):
@@ -601,6 +606,7 @@ class BatchValidateRequest(BaseModel):
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
+    cpa_uploaded_filter: Optional[bool] = None
 
 
 @router.post("/batch-refresh")
@@ -618,7 +624,8 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
+            request.status_filter, request.email_service_filter, request.search_filter,
+            request.cpa_uploaded_filter
         )
 
     for account_id in ids:

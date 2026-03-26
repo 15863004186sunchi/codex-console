@@ -303,26 +303,26 @@ function renderAccounts(accounts) {
             </td>
             <td class="password-cell">
                 ${account.password
-                    ? `<span style="display:inline-flex;align-items:center;gap:4px;">
+            ? `<span style="display:inline-flex;align-items:center;gap:4px;">
                         <span class="password-hidden" data-pwd="${escapeHtml(account.password)}" onclick="togglePassword(this, this.dataset.pwd)" title="点击查看">${escapeHtml(account.password.substring(0, 4) + '****')}</span>
                         <button class="btn-copy-icon copy-pwd-btn" data-pwd="${escapeHtml(account.password)}" title="复制密码">📋</button>
                        </span>`
-                    : '-'}
+            : '-'}
             </td>
             <td>${getServiceTypeText(account.email_service)}</td>
             <td>${getStatusIcon(account.status)}</td>
             <td>
                 <div class="cpa-status">
                     ${account.cpa_uploaded
-                        ? `<span class="badge uploaded" title="已上传于 ${format.date(account.cpa_uploaded_at)}">✓</span>`
-                        : `<span class="badge pending">-</span>`}
+            ? `<span class="badge uploaded" title="已上传于 ${format.date(account.cpa_uploaded_at)}">✓</span>`
+            : `<span class="badge pending">-</span>`}
                 </div>
             </td>
             <td>
                 <div class="cpa-status">
                     ${account.subscription_type
-                        ? `<span class="badge uploaded" title="${account.subscription_type}">${account.subscription_type}</span>`
-                        : `<span class="badge pending">-</span>`}
+            ? `<span class="badge uploaded" title="${account.subscription_type}">${account.subscription_type}</span>`
+            : `<span class="badge pending">-</span>`}
                 </div>
             </td>
             <td>${format.date(account.last_refresh) || '-'}</td>
@@ -533,7 +533,7 @@ async function handleBatchRefresh() {
 
 // 一键刷新所有 401 并同步
 async function handleRefreshAll401() {
-    const confirmed = await confirm('确定要刷新所有状态为“失效”或“过期”的账号吗？\n刷新成功后将自动同步到已绑定的 CPA/CPAMC 平台。');
+    const confirmed = await confirm('确定要针对所有已同步到 CPA 平台的账号执行“重连同步”吗？\n（即使状态显示“正常”，也会尝试重新刷新并同步以修复 401 问题）');
     if (!confirmed) return;
 
     elements.refreshAll401Btn.disabled = true;
@@ -544,11 +544,12 @@ async function handleRefreshAll401() {
         const payload = {
             ids: [],
             select_all: true,
-            status_filter: 'expired,failed',
+            status_filter: 'active,expired,failed',
+            cpa_uploaded_filter: true,
             auto_sync: true
         };
         const result = await api.post('/accounts/batch-refresh', payload);
-        toast.success(`重连任务完成！成功: ${result.success_count}，失败: ${result.failed_count}`);
+        toast.success(`任务完成！成功: ${result.success_count}，失败: ${result.failed_count}`);
         loadStats();
         loadAccounts();
     } catch (error) {
@@ -598,9 +599,9 @@ async function viewAccount(id) {
                     <span class="label">密码</span>
                     <span class="value">
                         ${account.password
-                            ? `<code style="font-size: 0.75rem;">${escapeHtml(account.password)}</code>
+                ? `<code style="font-size: 0.75rem;">${escapeHtml(account.password)}</code>
                                <button class="btn btn-ghost btn-sm" onclick="copyToClipboard('${escapeHtml(account.password)}')" title="复制">📋</button>`
-                            : '-'}
+                : '-'}
                     </span>
                 </div>
                 <div class="info-item">
