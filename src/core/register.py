@@ -134,6 +134,8 @@ class RegistrationEngine:
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
         self._token_acquisition_requires_login: bool = False  # 新注册账号需要二次登录拿 token
+        self._did: Optional[str] = None  # 当前阶段的 Device ID
+        self._sentinel_token: Optional[str] = None  # 当前阶段的 Sentinel Token
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""
@@ -162,6 +164,20 @@ class RegistrationEngine:
             logger.warning(message)
         else:
             logger.info(message)
+
+    def _get_sentinel_headers(self) -> Dict[str, str]:
+        """构造 Sentinel Token 请求头"""
+        if not self._did or not self._sentinel_token:
+            return {}
+
+        sentinel = json.dumps({
+            "p": "",
+            "t": "",
+            "c": self._sentinel_token,
+            "id": self._did,
+            "flow": "authorize_continue",
+        })
+        return {"openai-sentinel-token": sentinel}
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
@@ -282,6 +298,9 @@ class RegistrationEngine:
             SignupFormResult: 提交结果，包含账号状态判断
         """
         try:
+            # 保存当前阶段的凭证，供后续步骤使用
+            self._did = did
+            self._sentinel_token = sen_token
             request_body = json.dumps({
                 "username": {
                     "value": self.email,
@@ -383,13 +402,17 @@ class RegistrationEngine:
     def _submit_login_password(self) -> SignupFormResult:
         """提交登录密码，进入邮箱验证码页面。"""
         try:
+            headers = {
+                "referer": "https://auth.openai.com/log-in/password",
+                "accept": "application/json",
+                "content-type": "application/json",
+            }
+            # 注入 Sentinel Token，解决 401 校验问题
+            headers.update(self._get_sentinel_headers())
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["password_verify"],
-                headers={
-                    "referer": "https://auth.openai.com/log-in/password",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=json.dumps({"password": self.password}),
             )
 
@@ -545,13 +568,16 @@ class RegistrationEngine:
                 "username": self.email
             })
 
+            headers = {
+                "referer": "https://auth.openai.com/create-account/password",
+                "accept": "application/json",
+                "content-type": "application/json",
+            }
+            headers.update(self._get_sentinel_headers())
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["register"],
-                headers={
-                    "referer": "https://auth.openai.com/create-account/password",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=register_body,
             )
 
@@ -610,12 +636,15 @@ class RegistrationEngine:
             # 记录发送时间戳
             self._otp_sent_at = time.time()
 
+            headers = {
+                "referer": "https://auth.openai.com/create-account/password",
+                "accept": "application/json",
+            }
+            headers.update(self._get_sentinel_headers())
+
             response = self.session.get(
                 OPENAI_API_ENDPOINTS["send_otp"],
-                headers={
-                    "referer": "https://auth.openai.com/create-account/password",
-                    "accept": "application/json",
-                },
+                headers=headers,
             )
 
             self._log(f"验证码发送状态: {response.status_code}")
@@ -655,13 +684,16 @@ class RegistrationEngine:
         try:
             code_body = f'{{"code":"{code}"}}'
 
+            headers = {
+                "referer": "https://auth.openai.com/email-verification",
+                "accept": "application/json",
+                "content-type": "application/json",
+            }
+            headers.update(self._get_sentinel_headers())
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
-                headers={
-                    "referer": "https://auth.openai.com/email-verification",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=code_body,
             )
 
@@ -679,13 +711,16 @@ class RegistrationEngine:
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
             create_account_body = json.dumps(user_info)
 
+            headers = {
+                "referer": "https://auth.openai.com/about-you",
+                "accept": "application/json",
+                "content-type": "application/json",
+            }
+            headers.update(self._get_sentinel_headers())
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["create_account"],
-                headers={
-                    "referer": "https://auth.openai.com/about-you",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 data=create_account_body,
             )
 
