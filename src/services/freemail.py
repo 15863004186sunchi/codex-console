@@ -9,6 +9,7 @@ import logging
 import random
 import string
 from typing import Optional, Dict, Any, List
+from datetime import datetime
 
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
 from ..core.http_client import HTTPClient, RequestConfig
@@ -58,6 +59,8 @@ class FreemailService(BaseEmailService):
 
         # 缓存 domain 列表
         self._domains = []
+        # 已处理过的邮件 ID
+        self._seen_mail_ids: set = set()
 
     def _get_headers(self) -> Dict[str, str]:
         """构造 admin 请求头"""
@@ -201,7 +204,6 @@ class FreemailService(BaseEmailService):
         logger.info(f"正在从 Freemail 邮箱 {email} 获取验证码...")
 
         start_time = time.time()
-        seen_mail_ids: set = set()
 
         while time.time() - start_time < timeout:
             try:
@@ -211,11 +213,28 @@ class FreemailService(BaseEmailService):
                     continue
 
                 for mail in mails:
-                    mail_id = mail.get("id")
-                    if not mail_id or mail_id in seen_mail_ids:
+                    mail_id = str(mail.get("id") or "")
+                    if not mail_id or mail_id in self._seen_mail_ids:
                         continue
 
-                    seen_mail_ids.add(mail_id)
+                    # 检查时间戳
+                    created_at = mail.get("created_at") or mail.get("createdAt")
+                    if created_at and otp_sent_at:
+                        try:
+                            if isinstance(created_at, str):
+                                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                                mail_ts = dt.timestamp()
+                            else:
+                                mail_ts = float(created_at) / 1000 if created_at > 1e11 else float(created_at)
+                            
+                            if mail_ts < otp_sent_at - 10:
+                                logger.debug(f"跳过旧邮件 {mail_id}: {created_at} < {otp_sent_at}")
+                                self._seen_mail_ids.add(mail_id)
+                                continue
+                        except Exception:
+                            pass
+
+                    self._seen_mail_ids.add(mail_id)
 
                     sender = str(mail.get("sender", "")).lower()
                     subject = str(mail.get("subject", ""))

@@ -8,6 +8,7 @@ import re
 import time
 import json
 import logging
+from datetime import datetime
 from email import message_from_string
 from email.header import decode_header, make_header
 from email.message import Message
@@ -67,6 +68,8 @@ class TempMailService(BaseEmailService):
 
         # 邮箱缓存：email -> {jwt, address}
         self._email_cache: Dict[str, Dict[str, Any]] = {}
+        # 已处理过的邮件 ID：防止重复获取旧验证码（如注册码被当作登录码）
+        self._seen_mail_ids: set = set()
 
     def _decode_mime_header(self, value: str) -> str:
         """解码 MIME 头，兼容 RFC 2047 编码主题。"""
@@ -296,7 +299,6 @@ class TempMailService(BaseEmailService):
         logger.info(f"正在从 TempMail 邮箱 {email} 获取验证码...")
 
         start_time = time.time()
-        seen_mail_ids: set = set()
 
         # 优先使用用户级 JWT，回退到 admin API
         cached = self._email_cache.get(email, {})
@@ -330,11 +332,31 @@ class TempMailService(BaseEmailService):
                     continue
 
                 for mail in mails:
-                    mail_id = mail.get("id")
-                    if not mail_id or mail_id in seen_mail_ids:
+                    mail_id = str(mail.get("id") or "")
+                    if not mail_id or mail_id in self._seen_mail_ids:
                         continue
 
-                    seen_mail_ids.add(mail_id)
+                    # 检查时间戳：防止在“注册-登录”流水线中拿到上一阶段的旧码
+                    created_at = mail.get("createdAt") or mail.get("created_at")
+                    if created_at and otp_sent_at:
+                        try:
+                            if isinstance(created_at, str):
+                                # 假设 ISO 格式，支持 2024-03-26T17:21:57Z
+                                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                                mail_ts = dt.timestamp()
+                            else:
+                                # 兼容毫秒/秒级时间戳
+                                mail_ts = float(created_at) / 1000 if created_at > 1e11 else float(created_at)
+                            
+                            if mail_ts < otp_sent_at - 10:
+                                # 这是旧邮件（加10秒冗余），忽略并记录
+                                logger.debug(f"跳过旧邮件 {mail_id}: {created_at} < {otp_sent_at}")
+                                self._seen_mail_ids.add(mail_id)
+                                continue
+                        except Exception as te:
+                            logger.debug(f"解析邮件时间戳失败 (跳过): {te}")
+
+                    self._seen_mail_ids.add(mail_id)
 
                     parsed = self._extract_mail_fields(mail)
                     sender = parsed["sender"].lower()
