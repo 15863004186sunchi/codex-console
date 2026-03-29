@@ -877,7 +877,9 @@ class RegistrationEngine:
 
                 workspaces = auth_json.get("workspaces") or []
                 if not workspaces:
-                    self._log("授权 Cookie 里没有 workspace 信息", "error")
+                    # 如果没有 workspace 信息，记录一下 payload 方便排查是否是 add-phone 等状态
+                    self._log(f"授权 Cookie Payload: {auth_json}", "debug")
+                    self._log("授权 Cookie 里没有 workspace 信息，可能账号处于待验证状态（如需绑定手机）", "error")
                     return None
 
                 workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
@@ -1082,6 +1084,12 @@ class RegistrationEngine:
 
                 # 第一层增强：优先复用注册后的现成会话 (Session Reuse)
                 if continue_url != "success":
+                    if "add-phone" in continue_url:
+                        self._log("⚠️ 检测到账号触发了手机号验证 (add-phone)，无法自动跳过", "error")
+                        result.error_message = "需要强制手机号验证"
+                        result.metadata["status_reason"] = "add_phone_required"
+                        return result
+
                     self._log("⚡ 尝试走 Session 复用快捷路径，跳过二次重连登录...")
                     try:
                         # 访问 callback URL 建立 ChatGPT 会话
