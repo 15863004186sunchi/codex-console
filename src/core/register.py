@@ -10,7 +10,7 @@ import logging
 import secrets
 import string
 from typing import Optional, Dict, Any, Tuple, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from curl_cffi import requests as cffi_requests
@@ -49,8 +49,8 @@ class RegistrationResult:
     id_token: str = ""
     session_token: str = ""  # 会话令牌
     error_message: str = ""
-    logs: list = None
-    metadata: dict = None
+    logs: list = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
     source: str = "register"  # 'register' 或 'login'，区分账号来源
 
     def to_dict(self) -> Dict[str, Any]:
