@@ -179,6 +179,62 @@ class RegistrationEngine:
         })
         return {"openai-sentinel-token": sentinel}
 
+    def _get_chatgpt_session_tokens(self, referer: str) -> Optional[Dict[str, Any]]:
+        """从 ChatGPT 站内 session 接口获取 token"""
+        try:
+            self._log("尝试从 ChatGPT 站内 Session 接口直接获取鉴权信息...")
+
+            response = self.session.get(
+                OPENAI_API_ENDPOINTS["session"],
+                headers={
+                    "referer": referer,
+                    "accept": "*/*",
+                },
+                timeout=15
+            )
+
+            if response.status_code != 200:
+                self._log(f"获取 Session 失败: {response.status_code}", "warning")
+                return None
+
+            try:
+                data = response.json()
+            except Exception:
+                self._log("解析 Session JSON 失败", "warning")
+                return None
+
+            access_token = data.get("accessToken") or data.get("access_token")
+
+            # 如果字段不匹配，递归扫描整个 JSON 找到 JWT
+            if not access_token:
+                def find_token(obj):
+                    if isinstance(obj, str) and obj.startswith("eyJ"):
+                        return obj
+                    if isinstance(obj, dict):
+                        for v in obj.values():
+                            res = find_token(v)
+                            if res: return res
+                    if isinstance(obj, list):
+                        for v in obj:
+                            res = find_token(v)
+                            if res: return res
+                    return None
+                access_token = find_token(data)
+
+            if access_token:
+                self._log("🎉 神了！直接从 Session 接口捞到了 accessToken")
+                return {
+                    "access_token": access_token,
+                    "account_id": data.get("user", {}).get("id", ""),
+                    "source": "session"
+                }
+
+            self._log("Session 接口未返回有效的 accessToken", "warning")
+            return None
+        except Exception as e:
+            self._log(f"直接获取 Session Token 失败: {e}", "debug")
+            return None
+
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
         return ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
@@ -371,6 +427,31 @@ class RegistrationEngine:
             self._log(f"{log_label}失败: {e}", "error")
             return SignupFormResult(success=False, error_message=str(e))
 
+    def _finalize_registration(self, result: RegistrationResult) -> RegistrationResult:
+        """注册结果收尾工作（日志记录等）"""
+        self._log("=" * 60)
+        self._log("注册/登录流程顺利通关，账号信息已就位")
+        self._log(f"邮箱: {result.email}")
+        self._log(f"Account ID: {result.account_id}")
+        self._log(f"Workspace ID: {result.workspace_id}")
+        self._log(f"鉴权方式: {result.source}")
+        self._log("=" * 60)
+
+        result.success = True
+        result.metadata = {
+            "email_service": self.email_service.service_type.value,
+            "proxy_used": self.proxy_url,
+            "registered_at": datetime.now().isoformat(),
+            "is_existing_account": self._is_existing_account,
+            "token_acquired_via": result.source,
+        }
+
+        # 缓存密码以便保存到数据库
+        if not result.password and self.password:
+            result.password = self.password
+
+        return result
+
     def _submit_signup_form(
         self,
         did: str,
@@ -475,26 +556,37 @@ class RegistrationEngine:
         self._log(f"{label}: Sentinel 点头放行，继续前进")
         return did, sen_token
 
-    def _complete_token_exchange(self, result: RegistrationResult) -> bool:
+    def _complete_token_exchange(self, result: RegistrationResult, fast_path: bool = False) -> bool:
         """在登录态已建立后，继续完成 workspace 和 OAuth token 获取。"""
-        self._log("等待登录验证码到场，最后这位嘉宾还在路上...")
-        code = self._get_verification_code()
-        if not code:
-            result.error_message = "获取验证码失败"
-            return False
+        # 如果不是快捷路径，则执行标准的验证码校验逻辑
+        if not fast_path:
+            self._log("等待登录验证码到场，最后这位嘉宾还在路上...")
+            code = self._get_verification_code()
+            if not code:
+                result.error_message = "获取验证码失败"
+                return False
 
-        self._log("核对登录验证码，验明正身一下...")
-        if not self._validate_verification_code(code):
-            result.error_message = "验证码校验失败"
-            return False
+            self._log("核对登录验证码，验明正身一下...")
+            if not self._validate_verification_code(code):
+                result.error_message = "验证码校验失败"
+                return False
 
+        # 如果是快捷路径，result 已经填了 access_token，这里主要补齐 Workspace ID
         self._log("摸一下 Workspace ID，看看该坐哪桌...")
         workspace_id = self._get_workspace_id()
         if not workspace_id:
+            # 快捷路径如果拿不到 Workspace ID，可能需要 Fallback，但也可能这个账号暂时没开启 workspace
+            self._log("无法直接获取 Workspace ID，可能尚未开启或需要重新 OAuth", "warning")
+            if fast_path:
+                return True # 对于快捷路径，即使没拿到 Workspace ID 也算成功，后续可自动刷新补齐
             result.error_message = "获取 Workspace ID 失败"
             return False
 
         result.workspace_id = workspace_id
+
+        # 对于快捷路径，我们不再需要下面的选择 Workspace / OAuth 回调流程，因为已经拿到了 token
+        if fast_path:
+            return True
 
         self._log("选择 Workspace，安排个靠谱座位...")
         continue_url = self._select_workspace(workspace_id)
@@ -544,15 +636,28 @@ class RegistrationEngine:
         login_start_result = self._submit_login_start(did, sen_token)
         if not login_start_result.success:
             return False, f"重新登录提交邮箱失败: {login_start_result.error_message}"
-        if login_start_result.page_type != OPENAI_PAGE_TYPES["LOGIN_PASSWORD"]:
-            return False, f"重新登录未进入密码页面: {login_start_result.page_type or 'unknown'}"
 
-        password_result = self._submit_login_password()
-        if not password_result.success:
-            return False, f"重新登录提交密码失败: {password_result.error_message}"
-        if not password_result.is_existing_account:
-            return False, f"重新登录未进入验证码页面: {password_result.page_type or 'unknown'}"
-        return True, ""
+        # 第二层增强：智能分支处理 (Flexible Branching)
+        page_type = login_start_result.page_type
+
+        # 情况 1: 直接进入邮箱验证码页面 (常见于注册后立即重连)
+        if page_type in [OPENAI_PAGE_TYPES["EMAIL_OTP_VERIFICATION"], "email-verification", "email-otp"]:
+            self._log("登录流程直接命中验证码分支，正在接验证码...")
+            return True, ""
+
+        # 情况 2: 进入标准密码页面
+        if page_type == OPENAI_PAGE_TYPES["LOGIN_PASSWORD"]:
+            self._log("登录流程命中密码分支，正在提交密码...")
+            password_result = self._submit_login_password()
+            if not password_result.success:
+                return False, f"重新登录提交密码失败: {password_result.error_message}"
+            return True, ""
+
+        # 情况 3: 异常进入注册态
+        if page_type == OPENAI_PAGE_TYPES["PASSWORD_REGISTRATION"]:
+            return False, "已注册账号在重新登录时异常进入注册路径"
+
+        return False, f"重新登录处于未知页面类型: {page_type or 'unknown'}"
 
     def _register_password(self) -> Tuple[bool, Optional[str]]:
         """注册密码"""
@@ -704,8 +809,8 @@ class RegistrationEngine:
             self._log(f"验证验证码失败: {e}", "error")
             return False
 
-    def _create_user_account(self) -> bool:
-        """创建用户账户"""
+    def _create_user_account(self) -> Optional[str]:
+        """创建用户账户并获取 continue_url"""
         try:
             user_info = generate_random_user_info()
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
@@ -728,13 +833,23 @@ class RegistrationEngine:
 
             if response.status_code != 200:
                 self._log(f"账户创建失败: {response.text[:200]}", "warning")
-                return False
+                return None
 
-            return True
+            # 从响应中提取 continue_url
+            try:
+                data = response.json()
+                continue_url = data.get("continue_url") or data.get("url") or data.get("redirect_url")
+                if continue_url:
+                    self._log(f"获取到注册后 continue_url: {continue_url[:100]}...")
+                    return continue_url
+            except Exception:
+                pass
+
+            return "success"
 
         except Exception as e:
             self._log(f"创建账户失败: {e}", "error")
-            return False
+            return None
 
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
@@ -960,10 +1075,32 @@ class RegistrationEngine:
                     return result
 
                 self._log("9. 给账号办个正式户口，名字写档案里...")
-                if not self._create_user_account():
+                continue_url = self._create_user_account()
+                if not continue_url:
                     result.error_message = "创建用户账户失败"
                     return result
 
+                # 第一层增强：优先复用注册后的现成会话 (Session Reuse)
+                if continue_url != "success":
+                    self._log("⚡ 尝试走 Session 复用快捷路径，跳过二次重连登录...")
+                    try:
+                        # 访问 callback URL 建立 ChatGPT 会话
+                        resp = self.session.get(continue_url, timeout=15)
+                        # 拿到最终跳转后的 URL 作为 Referer
+                        session_tokens = self._get_chatgpt_session_tokens(resp.url)
+                        if session_tokens:
+                            result.access_token = session_tokens["access_token"]
+                            result.account_id = session_tokens["account_id"]
+                            result.source = "session"
+                            # 获取 Workspace ID 等收尾工作
+                            if self._complete_token_exchange(result, fast_path=True):
+                                return self._finalize_registration(result)
+                            # 如果收尾失败，继续走标准重连流程
+                            self._log("Session 快捷路径收尾失败，将执行标准登录流程", "warning")
+                    except Exception as se:
+                        self._log(f"Session 快捷路径执行失败: {se}，回退到标准重连流程", "debug")
+
+                # 第二层：如果快捷路径失败，走标准的重新登录流程
                 login_ready, login_error = self._restart_login_flow()
                 if not login_ready:
                     result.error_message = login_error
@@ -973,26 +1110,7 @@ class RegistrationEngine:
                 return result
 
             # 10. 完成
-            self._log("=" * 60)
-            if self._is_existing_account:
-                self._log("登录成功，老朋友顺利回家")
-            else:
-                self._log("注册成功，账号已经稳稳落地，可以开香槟了")
-            self._log(f"邮箱: {result.email}")
-            self._log(f"Account ID: {result.account_id}")
-            self._log(f"Workspace ID: {result.workspace_id}")
-            self._log("=" * 60)
-
-            result.success = True
-            result.metadata = {
-                "email_service": self.email_service.service_type.value,
-                "proxy_used": self.proxy_url,
-                "registered_at": datetime.now().isoformat(),
-                "is_existing_account": self._is_existing_account,
-                "token_acquired_via_relogin": self._token_acquisition_requires_login,
-            }
-
-            return result
+            return self._finalize_registration(result)
 
         except Exception as e:
             self._log(f"注册过程中发生未预期错误: {e}", "error")
