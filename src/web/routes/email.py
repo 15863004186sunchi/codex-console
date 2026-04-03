@@ -245,6 +245,7 @@ async def get_service_types():
                     {"name": "use_ssl", "label": "使用 SSL", "required": False, "default": True},
                     {"name": "email", "label": "邮箱地址", "required": True},
                     {"name": "password", "label": "密码/授权码", "required": True, "secret": True},
+                    {"name": "domain", "label": "邮箱域名 (Catch-all)", "required": False, "placeholder": "example.com"},
                 ]
             }
         ]

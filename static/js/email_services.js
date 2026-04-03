@@ -296,7 +296,12 @@ function getCustomServiceAddress(service) {
     if (service._subType === 'imap') {
         const host = service.config?.host || '-';
         const emailAddr = service.config?.email || '';
-        return `${escapeHtml(host)}<div style="color: var(--text-muted); margin-top: 4px;">${escapeHtml(emailAddr)}</div>`;
+        const domain = service.config?.domain;
+        let addrHtml = `${escapeHtml(host)}<div style="color: var(--text-muted); margin-top: 4px;">${escapeHtml(emailAddr)}</div>`;
+        if (domain) {
+            addrHtml += `<div style="color: var(--text-success); font-size: 0.7rem; margin-top: 2px;">Catch-all: @${escapeHtml(domain)}</div>`;
+        }
+        return addrHtml;
     }
     const baseUrl = service.config?.base_url || '-';
     const domain = service.config?.default_domain || service.config?.domain;
@@ -473,7 +478,8 @@ async function handleAddCustom(e) {
             port: parseInt(formData.get('imap_port'), 10) || 993,
             use_ssl: formData.get('imap_use_ssl') !== 'false',
             email: formData.get('imap_email'),
-            password: formData.get('imap_password')
+            password: formData.get('imap_password'),
+            domain: formData.get('imap_domain')
         };
     }
 
@@ -657,6 +663,7 @@ async function editCustomService(id, subType) {
             document.getElementById('edit-imap-email').value = service.config?.email || '';
             document.getElementById('edit-imap-password').value = '';
             document.getElementById('edit-imap-password').placeholder = service.config?.password ? '已设置，留空保持不变' : '请输入密码/授权码';
+            document.getElementById('edit-imap-domain').value = service.config?.domain || '';
         }
 
         elements.editCustomModal.classList.add('active');
@@ -708,7 +715,8 @@ async function handleEditCustom(e) {
             host: formData.get('imap_host'),
             port: parseInt(formData.get('imap_port'), 10) || 993,
             use_ssl: formData.get('imap_use_ssl') !== 'false',
-            email: formData.get('imap_email')
+            email: formData.get('imap_email'),
+            domain: formData.get('imap_domain')
         };
         const pwd = formData.get('imap_password');
         if (pwd && pwd.trim()) config.password = pwd.trim();

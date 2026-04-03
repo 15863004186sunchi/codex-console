@@ -40,6 +40,7 @@ class ImapMailService(BaseEmailService):
         self.use_ssl: bool = bool(cfg.get("use_ssl", True))
         self.email_addr: str = str(cfg["email"]).strip()
         self.password: str = str(cfg["password"])
+        self.domain: Optional[str] = cfg.get("domain", "").strip() or None
         self.timeout: int = int(cfg.get("timeout", 30))
         self.max_retries: int = int(cfg.get("max_retries", 3))
 
@@ -106,12 +107,27 @@ class ImapMailService(BaseEmailService):
         return None
 
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """IMAP 模式不创建新邮箱，直接返回配置中的固定地址"""
+        """
+        创建新邮箱地址。
+        如果配置了 domain，则生成随机前缀的域名邮箱（Catch-all 模式）；
+        否则返回配置中的固定 Gmail/IMAP 地址。
+        """
+        import secrets
+        import string
+
+        email_addr = self.email_addr
+        
+        # 如果设置了 domain，则生成随机前缀 (Catch-all 模式)
+        if self.domain:
+            prefix = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+            email_addr = f"{prefix}@{self.domain}"
+            logger.info(f"IMAP Catch-all 模式：生成随机地址 {email_addr}")
+        
         self.update_status(True)
         return {
-            "email": self.email_addr,
-            "service_id": self.email_addr,
-            "id": self.email_addr,
+            "email": email_addr,
+            "service_id": email_addr,
+            "id": email_addr,
         }
 
     def get_verification_code(
@@ -134,6 +150,8 @@ class ImapMailService(BaseEmailService):
             while time.time() - start_time < timeout:
                 try:
                     # 搜索所有未读邮件
+                    # 如果能确定收件人地址，可以尝试更精确的搜索，但某些转发服务会修改 Envelope-To
+                    # 故先搜索所有未读，再在内存中过滤
                     status, data = mail.search(None, "UNSEEN")
                     if status != "OK" or not data or not data[0]:
                         time.sleep(3)
@@ -153,6 +171,16 @@ class ImapMailService(BaseEmailService):
 
                         raw = msg_data[0][1]
                         msg = email.message_from_bytes(raw)
+
+                        # 检查收件人 (防止多线程注册时拿错验证码)
+                        to_addr = self._decode_str(msg.get("To", "")).lower()
+                        if email.lower() not in to_addr:
+                            # 考虑到转发情况，如果 To header 里没有，尝试检查 X-Forwarded-To 或 Delivered-To
+                            delivered_to = self._decode_str(msg.get("Delivered-To", "")).lower()
+                            forwarded_to = self._decode_str(msg.get("X-Forwarded-To", "")).lower()
+                            if email.lower() not in delivered_to and email.lower() not in forwarded_to:
+                                logger.debug(f"跳过非目标邮件: To={to_addr}, Expected={email}")
+                                continue
 
                         # 检查发件人
                         from_addr = self._decode_str(msg.get("From", ""))
